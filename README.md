@@ -9,6 +9,23 @@
 
 ## インストール
 
+### ビルド済みバイナリ（推奨）
+
+タグ push をトリガーに [GitHub Actions](.github/workflows/release.yml) がクロスプラットフォームのバイナリを自動ビルドし、[Releases](https://github.com/tominaga-h/git-cleaner/releases) にアップロードする。配布されるバイナリは以下の 3 種類。
+
+| プラットフォーム | ターゲット | アセット名 |
+|------------------|-----------|-----------|
+| Mac OS (intel) | `x86_64-apple-darwin` | `git-cleaner` |
+| Linux (x86_64) | `x86_64-unknown-linux-gnu` | `git-cleaner-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS (Apple Silicon) | `aarch64-apple-darwin` | `git-cleaner-aarch64-apple-darwin.tar.gz` |
+| Windows (x86_64) | `x86_64-pc-windows-msvc` | `git-cleaner-x86_64-pc-windows-msvc.zip` |
+
+自分の環境に合ったアセットを [最新リリース](https://github.com/tominaga-h/git-cleaner/releases/latest) からダウンロードし、`git-cleaner` または `git-cleaner.exe` を PATH の通ったディレクトリに置く。
+
+### ソースからビルド
+
+Rust ツールチェインがあれば、ソースからインストールできる。
+
 ```bash
 cargo install --path .
 # または開発時
@@ -35,6 +52,9 @@ git-cleaner --target develop
 # 削除対象を先頭 N 件に絞る（大量のブランチがある場合に便利）
 git-cleaner --limit 5
 git-cleaner -d -l 10        # 先頭10件だけ dry-run で確認
+
+# Gitはgit-xxxというバイナリを検知してサブコマンド形式で使用できる。
+git cleaner init
 ```
 
 ### オプション
