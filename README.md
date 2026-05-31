@@ -1,5 +1,7 @@
 # git-cleaner
 
+[![status](https://img.shields.io/github/actions/workflow/status/tominaga-h/git-cleaner/ci.yml)](https://github.com/tominaga-h/git-cleaner/actions)
+
 ベースブランチ（`develop` / `main` 等）にマージ済みのローカルブランチを安全に検出し、ユーザー確認のもと対話的に削除する CLI ツール。
 
 設定は独自ファイルを作らず、Git 標準の config（`[cleaner]` セクション）に統合する。
