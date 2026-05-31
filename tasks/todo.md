@@ -81,8 +81,8 @@
 
 ## チェックポイント（人間レビュー）
 
-- [ ] Task 0 後: clap 構成の確認
-- [ ] Task 1 後: 実マージで merged 判定の正しさ・`find_candidates` の seam 確認
-- [ ] Task 3 後: リモート生存定義・fetch 失敗 degrade 確認
-- [ ] Task 5 後: 書き込む実バイト・冪等性・コメント保存の確認
-- [ ] Task 6 / リリース前: full dry-run → 使い捨て repo で実削除
+- [x] Task 0 後: clap 構成の確認
+- [x] Task 1 後: 実マージで merged 判定の正しさ・`find_candidates` の seam 確認
+- [x] Task 3 後: リモート生存定義・fetch 失敗 degrade 確認
+- [x] Task 5 後: 書き込む実バイト・冪等性・コメント保存の確認
+- [x] Task 6 / リリース前: full dry-run → 使い捨て repo で実削除
