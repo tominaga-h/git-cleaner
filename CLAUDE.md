@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 言語
+
+ユーザーへの出力（応答文・AskUserQuestion の質問と選択肢など）は必ず日本語で書くこと。
+
 ## 概要
 
 `git-cleaner` は、ベースブランチ（`develop` / `main` 等）にマージ済みのローカルブランチを検出し、対話的に削除する Rust 製 CLI。設定は独自ファイルを持たず、Git 標準の config の `[cleaner]` セクションに統合する。ユーザー向けの文言は日本語。
