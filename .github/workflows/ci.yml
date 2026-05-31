@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# 同一ブランチの古い実行はキャンセル（無駄なランを削減）
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: make check (fmt / check / clippy / test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # stable ツールチェーン + rustfmt / clippy コンポーネント
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt clippy
+          rustup default stable
+
+      # cargo registry / target をキャッシュ（Cargo.lock 非コミットのため Cargo.toml をキーに）
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # 品質ゲート: fmt-check + cargo check -Dwarnings + clippy -D warnings + test
+      # githooks/pre-push.sh を --fix なし（--no-hook のみ）で実行し、整形崩れも検出する
+      - name: Run checks
+        run: bash githooks/pre-push.sh --no-hook
