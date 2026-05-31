@@ -102,6 +102,76 @@ pub fn is_merged_into(repo: &Repository, branch_tip: Oid, target_tip: Oid) -> Re
         .context("マージ判定に失敗しました")
 }
 
+/// マージコミット1件の情報（取り込んだ日付と短縮ハッシュ）。
+#[derive(Debug, Clone)]
+pub struct MergeInfo {
+    /// マージコミットの短縮ハッシュ。
+    pub short_hash: String,
+    /// マージコミットの作成日時（＝取り込んだ日付）。
+    pub merged_at: DateTime<Local>,
+}
+
+/// ターゲット履歴を1回だけ走査し、各 `branch_tip` を「取り込んだ」マージコミット
+/// を引けるマップを構築する。
+///
+/// `--no-ff` マージでは、ブランチ tip を親（通常は第2親）に持つマージコミットが
+/// ターゲット側に作られる。ここでは「親のいずれかが対象 tip と一致するマージ
+/// コミット（複数親）」のうち、ターゲット履歴上で最初に出会ったものを採用する。
+/// fast-forward 等でマージコミットが存在しないブランチはマップに含まれない
+/// （呼び出し側で「マージ日不明」として扱う）。
+pub fn build_merge_info_map(
+    repo: &Repository,
+    target_tip: Oid,
+    branch_tips: &[Oid],
+) -> Result<std::collections::HashMap<Oid, MergeInfo>> {
+    use std::collections::{HashMap, HashSet};
+
+    let wanted: HashSet<Oid> = branch_tips.iter().copied().collect();
+    let mut found: HashMap<Oid, MergeInfo> = HashMap::new();
+
+    let mut walk = repo.revwalk().context("revwalk の作成に失敗しました")?;
+    walk.push(target_tip)
+        .context("revwalk の起点設定に失敗しました")?;
+
+    for oid in walk {
+        let oid = oid.context("revwalk の走査に失敗しました")?;
+        let commit = repo
+            .find_commit(oid)
+            .context("コミットの取得に失敗しました")?;
+        // マージコミット（親が2つ以上）のみが「取り込み」を表す。
+        if commit.parent_count() < 2 {
+            continue;
+        }
+        for parent_oid in commit.parent_ids() {
+            // 既に確定済みの tip は上書きしない（最初に出会ったものを優先）。
+            if wanted.contains(&parent_oid) && !found.contains_key(&parent_oid) {
+                found.insert(
+                    parent_oid,
+                    MergeInfo {
+                        short_hash: short_hash(&commit),
+                        merged_at: commit_local_time(commit.time().seconds()),
+                    },
+                );
+            }
+        }
+        // 全部見つかったら早期終了。
+        if found.len() == wanted.len() {
+            break;
+        }
+    }
+
+    Ok(found)
+}
+
+/// コミットの短縮ハッシュ（git 既定の短縮長を尊重）を返す。
+fn short_hash(commit: &git2::Commit) -> String {
+    match commit.as_object().short_id() {
+        Ok(buf) => buf.as_str().unwrap_or("").to_string(),
+        // 取得失敗時は先頭7桁にフォールバック。
+        Err(_) => commit.id().to_string().chars().take(7).collect(),
+    }
+}
+
 /// `git fetch --prune` をシェルアウトで実行する。
 ///
 /// 認証（SSH agent / HTTPS credential / known_hosts）はユーザーの `git` 設定を

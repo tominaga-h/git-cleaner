@@ -84,8 +84,19 @@ pub fn relative_time(then: DateTime<Local>, now: DateTime<Local>) -> String {
 pub fn render_candidate(idx: usize, total: usize, c: &Candidate, now: DateTime<Local>) -> String {
     let dt = c.last_commit.format("%Y-%m-%d %H:%M");
     let rel = relative_time(c.last_commit, now);
+    let merge_line = match &c.merge_info {
+        Some(info) => {
+            let merged_dt = info.merged_at.format("%Y-%m-%d %H:%M");
+            let merged_rel = relative_time(info.merged_at, now);
+            format!(
+                "  - マージ: {merged_dt} ({merged_rel}) [{hash}]",
+                hash = info.short_hash
+            )
+        }
+        None => "  - マージ: 日時不明（マージコミットを特定できませんでした）".to_string(),
+    };
     format!(
-        "[{idx}/{total}] ブランチ '{name}' は '{target}' にマージ済みです。\n  - 最終コミット: {dt} ({rel})\n  - リモート状態: {remote}",
+        "[{idx}/{total}] ブランチ '{name}' は '{target}' にマージ済みです。\n{merge_line}\n  - 最終コミット: {dt} ({rel})\n  - リモート状態: {remote}",
         name = c.name,
         target = c.matched_target,
         remote = remote_state_label(c.remote_state),
@@ -135,6 +146,7 @@ mod tests {
             matched_target: "main".to_string(),
             last_commit: at(2026, 5, 25, 14, 30),
             remote_state: RemoteState::Alive,
+            merge_info: None,
         }
     }
 
@@ -183,6 +195,10 @@ mod tests {
             matched_target: "develop".to_string(),
             last_commit: at(2026, 5, 25, 14, 30),
             remote_state: RemoteState::Deleted,
+            merge_info: Some(crate::git::MergeInfo {
+                short_hash: "3f9a1c2".to_string(),
+                merged_at: at(2026, 5, 26, 10, 0),
+            }),
         };
         let out = render_candidate(1, 2, &c, now);
         assert!(out.contains("[1/2]"));
@@ -191,5 +207,25 @@ mod tests {
         assert!(out.contains("2026-05-25 14:30"));
         assert!(out.contains("6日前"));
         assert!(out.contains("削除済み"));
+        // マージ行: 日時 + 短縮ハッシュ。
+        assert!(out.contains("マージ: 2026-05-26 10:00"));
+        assert!(out.contains("[3f9a1c2]"));
+    }
+
+    #[test]
+    fn render_candidate_without_merge_info_shows_unknown() {
+        let now = at(2026, 5, 31, 12, 0);
+        let c = Candidate {
+            name: "feature/x".to_string(),
+            matched_target: "develop".to_string(),
+            last_commit: at(2026, 5, 25, 14, 30),
+            remote_state: RemoteState::Unknown,
+            merge_info: None,
+        };
+        let out = render_candidate(1, 1, &c, now);
+        assert!(
+            out.contains("マージ: 日時不明"),
+            "不明表示があるべき\n{out}"
+        );
     }
 }

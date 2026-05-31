@@ -7,7 +7,7 @@
 //! fetch/リモート生存（Task 3）・対話削除（Task 4）は後続。
 
 use crate::config;
-use crate::git::{self, RemoteState};
+use crate::git::{self, MergeInfo, RemoteState};
 use crate::ui;
 use anyhow::{bail, Result};
 use chrono::{DateTime, Local};
@@ -24,6 +24,8 @@ pub struct Candidate {
     pub last_commit: DateTime<Local>,
     /// 対応するリモートブランチの生存状態。
     pub remote_state: RemoteState,
+    /// ターゲット側で取り込んだマージコミット情報（特定できない場合は `None`）。
+    pub merge_info: Option<MergeInfo>,
 }
 
 /// merged 判定済みの入力（1ブランチ + マッチしたターゲット）。
@@ -37,6 +39,8 @@ pub struct MergedBranch {
     pub matched_target: Option<String>,
     pub last_commit: DateTime<Local>,
     pub remote_state: RemoteState,
+    /// ターゲット側で取り込んだマージコミット情報（特定できない場合は `None`）。
+    pub merge_info: Option<MergeInfo>,
 }
 
 /// マージ済みブランチ掃除のエントリポイント。
@@ -70,16 +74,33 @@ pub fn run(dry_run: bool, target: Option<String>) -> Result<()> {
     }
 
     // 各ローカルブランチについて、最初にマージ済みと判定できたターゲットを記録。
+    // マージコミット特定はターゲット単位でまとめて行うため、ここでは tip と
+    // マッチしたターゲット名だけを先に確定する。
+    struct Pending {
+        name: String,
+        tip: git2::Oid,
+        matched_target: Option<String>,
+        last_commit: DateTime<Local>,
+        remote_state: RemoteState,
+    }
+
+    // ターゲット名 → tip OID（存在しないターゲットは除外）。
+    let target_tips: Vec<(String, git2::Oid)> = targets
+        .iter()
+        .filter_map(|t| match git::resolve_target_tip(&repo, t) {
+            Ok(Some(tip)) => Some(Ok((t.clone(), tip))),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        })
+        .collect::<Result<_>>()?;
+
     let branches = git::local_branches(&repo)?;
-    let mut merged = Vec::with_capacity(branches.len());
+    let mut pending: Vec<Pending> = Vec::with_capacity(branches.len());
     for b in branches {
         let mut matched_target = None;
-        for t in &targets {
-            let Some(target_tip) = git::resolve_target_tip(&repo, t)? else {
-                continue; // 存在しないターゲットは無視。
-            };
-            if git::is_merged_into(&repo, b.tip, target_tip)? {
-                matched_target = Some(t.clone());
+        for (name, tip) in &target_tips {
+            if git::is_merged_into(&repo, b.tip, *tip)? {
+                matched_target = Some(name.clone());
                 break;
             }
         }
@@ -89,13 +110,42 @@ pub fn run(dry_run: bool, target: Option<String>) -> Result<()> {
         } else {
             RemoteState::Unknown
         };
-        merged.push(MergedBranch {
+        pending.push(Pending {
             name: b.name,
+            tip: b.tip,
             matched_target,
             last_commit: b.last_commit_time,
             remote_state,
         });
     }
+
+    // ターゲット単位で履歴を1回走査し、各ブランチ tip を取り込んだマージコミット
+    // を引く。81 ブランチでもターゲットごとに revwalk は1回で済む。
+    let mut merge_info_by_tip: std::collections::HashMap<git2::Oid, MergeInfo> =
+        std::collections::HashMap::new();
+    for (name, tip) in &target_tips {
+        let tips_for_target: Vec<git2::Oid> = pending
+            .iter()
+            .filter(|p| p.matched_target.as_deref() == Some(name.as_str()))
+            .map(|p| p.tip)
+            .collect();
+        if tips_for_target.is_empty() {
+            continue;
+        }
+        let map = git::build_merge_info_map(&repo, *tip, &tips_for_target)?;
+        merge_info_by_tip.extend(map);
+    }
+
+    let merged: Vec<MergedBranch> = pending
+        .into_iter()
+        .map(|p| MergedBranch {
+            merge_info: merge_info_by_tip.get(&p.tip).cloned(),
+            name: p.name,
+            matched_target: p.matched_target,
+            last_commit: p.last_commit,
+            remote_state: p.remote_state,
+        })
+        .collect();
 
     let candidates = find_candidates(merged, current.as_deref(), &cfg.protect);
 
@@ -160,6 +210,7 @@ pub fn find_candidates(
                 matched_target,
                 last_commit: b.last_commit,
                 remote_state: b.remote_state,
+                merge_info: b.merge_info,
             })
         })
         .collect()
@@ -183,6 +234,7 @@ mod tests {
             matched_target: target.map(|s| s.to_string()),
             last_commit: ts(),
             remote_state: RemoteState::Unknown,
+            merge_info: None,
         }
     }
 
