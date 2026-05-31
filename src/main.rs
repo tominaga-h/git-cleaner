@@ -2,6 +2,7 @@
 
 mod cleaner;
 mod cli;
+mod config;
 mod git;
 mod init;
 mod ui;

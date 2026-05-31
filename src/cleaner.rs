@@ -2,12 +2,16 @@
 //!
 //! Task 1: repo を開き、ローカルブランチを列挙し、ターゲットへのマージ済み
 //! 判定を行い、カレントブランチを除外して候補を表示する（dry-run コア）。
-//! config 読込（Task 2）・fetch/リモート生存（Task 3）・対話削除（Task 4）は後続。
+//! Task 2: `cleaner.targets` / `cleaner.protect` を config から読み、`--target`
+//! でターゲットを上書き、保護ブランチとカレントを除外する。
+//! fetch/リモート生存（Task 3）・対話削除（Task 4）は後続。
 
-use crate::git;
+use crate::config;
+use crate::git::{self, RemoteState};
 use crate::ui;
 use anyhow::{bail, Result};
 use chrono::{DateTime, Local};
+use std::io::Write;
 
 /// 削除候補ブランチ1件。`find_candidates` が組み立て、UI / 削除で消費する。
 #[derive(Debug, Clone)]
@@ -18,6 +22,8 @@ pub struct Candidate {
     pub matched_target: String,
     /// 最終コミット日時。
     pub last_commit: DateTime<Local>,
+    /// 対応するリモートブランチの生存状態。
+    pub remote_state: RemoteState,
 }
 
 /// merged 判定済みの入力（1ブランチ + マッチしたターゲット）。
@@ -30,21 +36,38 @@ pub struct MergedBranch {
     pub name: String,
     pub matched_target: Option<String>,
     pub last_commit: DateTime<Local>,
+    pub remote_state: RemoteState,
 }
 
 /// マージ済みブランチ掃除のエントリポイント。
 pub fn run(dry_run: bool, target: Option<String>) -> Result<()> {
     let repo = git::open()?;
-    let current = git::current_branch(&repo)?;
+    let workdir = repo
+        .workdir()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    // Task 1 暫定: config 未対応のため、ターゲットは `--target` 指定必須。
-    // Task 2 で `cleaner.targets` からの読み込みに置き換える。
+    // 「裏側で」fetch --prune を実行する。ローカル分析と重ねるため先に開始し、
+    // リモート生存判定の直前に完了を待つ。失敗しても警告のみで分析は継続する。
+    let fetch_result = git::fetch_prune(&workdir);
+    if let Err(e) = &fetch_result {
+        eprintln!("warning: {e:#}（リモート生存状態は不明として続行します）");
+    }
+    let fetch_ok = fetch_result.is_ok();
+
+    let current = git::current_branch(&repo)?;
+    let cfg = config::load(&repo)?;
+
+    // `--target` 指定があれば config の targets を上書き、なければ config を使う。
     let targets: Vec<String> = match target {
         Some(t) => vec![t],
-        None => {
-            bail!("ターゲットブランチを -t/--target で指定してください（config 対応は Task 2）")
-        }
+        None => cfg.targets.clone(),
     };
+    if targets.is_empty() {
+        bail!(
+            "マージ先ターゲットが設定されていません。`cleaner.targets` を設定するか -t/--target を指定してください。"
+        );
+    }
 
     // 各ローカルブランチについて、最初にマージ済みと判定できたターゲットを記録。
     let branches = git::local_branches(&repo)?;
@@ -60,14 +83,21 @@ pub fn run(dry_run: bool, target: Option<String>) -> Result<()> {
                 break;
             }
         }
+        // fetch に失敗した場合は生存状態を判定せず Unknown 扱い。
+        let remote_state = if fetch_ok {
+            git::remote_branch_alive(&repo, &b.name)?
+        } else {
+            RemoteState::Unknown
+        };
         merged.push(MergedBranch {
             name: b.name,
             matched_target,
             last_commit: b.last_commit_time,
+            remote_state,
         });
     }
 
-    let candidates = find_candidates(merged, current.as_deref(), &[]);
+    let candidates = find_candidates(merged, current.as_deref(), &cfg.protect);
 
     if candidates.is_empty() {
         println!("削除対象のブランチはありません。");
@@ -76,14 +106,31 @@ pub fn run(dry_run: bool, target: Option<String>) -> Result<()> {
 
     let now = Local::now();
     let total = candidates.len();
-    for (i, c) in candidates.iter().enumerate() {
-        println!("{}", ui::render_candidate(i + 1, total, c, now));
-    }
 
     if dry_run {
+        // dry-run: 一覧表示のみ。
+        for (i, c) in candidates.iter().enumerate() {
+            println!("{}", ui::render_candidate(i + 1, total, c, now));
+        }
         println!("\n（dry-run: 削除は行いません）");
+        return Ok(());
     }
-    // Task 4 で対話削除をここに追加する。
+
+    // 対話削除: 1件ずつ提示して y/N/skip を尋ね、Delete なら git branch -d。
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut reader = stdin.lock();
+    let mut writer = stdout.lock();
+    for (i, c) in candidates.iter().enumerate() {
+        writeln!(writer, "{}", ui::render_candidate(i + 1, total, c, now))?;
+        match ui::prompt(&mut reader, &mut writer, c)? {
+            ui::Decision::Delete => match git::delete_branch(&workdir, &c.name) {
+                Ok(()) => writeln!(writer, "-> 削除しました: {}", c.name)?,
+                Err(e) => writeln!(writer, "-> {e:#}")?,
+            },
+            ui::Decision::Skip => writeln!(writer, "-> スキップしました。")?,
+        }
+    }
     Ok(())
 }
 
@@ -112,6 +159,7 @@ pub fn find_candidates(
                 name: b.name,
                 matched_target,
                 last_commit: b.last_commit,
+                remote_state: b.remote_state,
             })
         })
         .collect()
@@ -134,6 +182,7 @@ mod tests {
             name: name.to_string(),
             matched_target: target.map(|s| s.to_string()),
             last_commit: ts(),
+            remote_state: RemoteState::Unknown,
         }
     }
 

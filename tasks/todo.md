@@ -29,51 +29,53 @@
 - **Verify**: `make check` パス（15 tests 全通過）✅
 - 備考: フェーズ1暫定で `-t` 必須（config 読込は Task 2 で配線）。protect 引数は `find_candidates` に用意済みで Task 2 で結線。
 
-## [ ] Task 2 — config 読込 + 結合（global+local union）
+## [x] Task 2 — config 読込 + 結合（global+local union）✅
 
-- [ ] `src/config.rs`（load / parse_csv / merge）
-- [ ] `src/cleaner.rs` へ配線（`--target` override、カレント常時保護）
-- [ ] **テスト(単体)**: `parse_csv`（trim/空）, `merge`（union+dedup）
-- [ ] **テスト(統合)**: `tests/config_filtering.rs`（protect 除外、`--target` が config に勝つ）
-- **Acceptance**: targets/protect 反映／protect は merged でも除外／`--target` 優先
-- **Verify**: `make check` パス
+- [x] `src/config.rs`（`load` / `parse_csv`。union は multivar 全エントリを `parse_csv` でまとめて実現）
+- [x] `src/cleaner.rs` へ配線（`--target` override、`cleaner.protect` + カレント常時保護）
+- [x] **テスト(単体)**: `parse_csv`（trim/空/dedup）, union（global+local multivar）— 計4件
+- [x] **テスト(統合)**: `tests/config_filtering.rs`（config targets 読込・protect 除外・`--target` 上書き）
+- **Acceptance**: targets/protect 反映／protect は merged でも除外／`--target` 優先 ✅
+- **Verify**: `make check` パス（24 tests 全通過）✅
+- 備考: テンプレート定数・`has_cleaner_section` は Task 5 で追加（dead_code 回避のため前倒ししない）。
 
-## [ ] Task 3 — リモート生存状態 + fetch --prune
+## [x] Task 3 — リモート生存状態 + fetch --prune ✅
 
-- [ ] `src/git.rs`（fetch_prune / remote_branch_alive → Alive/Deleted/Unknown）
-- [ ] `src/cleaner.rs`・`src/ui.rs` へ配線（spawn→分析→wait）
-- [ ] **テスト(単体)**: `remote_branch_alive`（remote ref 有/無 fixture）
-- [ ] **テスト(統合)**: `tests/remote_state.rs`（bare origin で push→削除→prune→表示）
-- **Acceptance**: pruned→削除済み／残存→存在／追跡なし→不明／fetch 失敗は警告して継続
-- **Verify**: `make check` パス（live fetch のみ手動）
+- [x] `src/git.rs`（`fetch_prune` / `remote_branch_alive` → Alive/Deleted/Unknown）
+- [x] `src/cleaner.rs`・`src/ui.rs` へ配線（fetch を分析前に実行→失敗時 warn して継続）
+- [x] **テスト(単体)**: `remote_branch_alive`（upstream 有=Alive / 無=Unknown / 不在ブランチ=Unknown）— 3件
+- [x] **テスト(統合)**: `tests/remote_state.rs`（bare origin で push→削除→prune→「削除済み」/「存在」）— 2件
+- **Acceptance**: pruned→削除済み／残存→存在／追跡なし→不明／fetch 失敗は警告して継続 ✅
+- **Verify**: `make check` パス（27 tests 全通過）✅
+- 備考: Deleted/Unknown 判別は `branch_upstream_name`（config 上の upstream 名の有無）で行う。
 
-## [ ] Task 4 — 対話削除（y/N/skip + git branch -d）
+## [x] Task 4 — 対話削除（y/N/skip + git branch -d）✅
 
-- [ ] `src/ui.rs`（prompt / Decision、reader/writer 注入）
-- [ ] `src/git.rs`（delete_branch シェルアウト、stderr surface）
-- [ ] `src/cleaner.rs`（ループ駆動、`--dry-run` は削除なし）
-- [ ] **テスト(単体)**: `prompt`（y/n/空=N/skip/不正→再プロンプト）
-- [ ] **テスト(統合)**: `tests/interactive_delete.rs`（`y\n`で消失/`n\n`で残存/`--dry-run`で削除なし）
-- **Acceptance**: `y`削除／`n`スキップ／`--dry-run`削除しない
-- **Verify**: `make check` パス（TTY 体感のみ手動）
+- [x] `src/ui.rs`（`prompt` / `Decision`、reader/writer 注入、EOF→Skip）
+- [x] `src/git.rs`（`delete_branch` シェルアウト、stderr surface）
+- [x] `src/cleaner.rs`（1件ずつ提示→prompt→Delete で削除、`--dry-run` は一覧のみ）
+- [x] **テスト(単体)**: `prompt`（y/yes/Y→Delete、n/空/skip/s→Skip、不正→再プロンプト、EOF→Skip）— 4件
+- [x] **テスト(統合)**: `tests/interactive_delete.rs`（`y`で消失/`n`で残存/`--dry-run`で削除なし）— 3件
+- **Acceptance**: `y`削除／`n`スキップ／`--dry-run`削除しない ✅
+- **Verify**: `make check` パス（34 tests 全通過）✅
 
-## [ ] Task 5 — init コマンド（冪等テンプレート追記）
+## [x] Task 5 — init コマンド（冪等テンプレート追記）✅
 
-- [ ] `src/config.rs`（GLOBAL_TEMPLATE / LOCAL_TEMPLATE / has_cleaner_section）
-- [ ] `src/init.rs`（`~/.gitconfig` と `repo.path()/config` に未存在時のみ追記）
-- [ ] **テスト(単体)**: `has_cleaner_section`（ヘッダ検出バリエーション）
-- [ ] **テスト(統合)**: `tests/init_idempotent.rs`（HOME=tempdir で2回実行→バイト一致、コメント保存）
-- **Acceptance**: 初回追記／2回目 no-op／既存不変／コメント保存
-- **Verify**: `make check` パス
+- [x] `src/config.rs`（`GLOBAL_TEMPLATE` / `LOCAL_TEMPLATE` / `has_cleaner_section`）
+- [x] `src/init.rs`（`~/.gitconfig` と `repo.path()/config` に未存在時のみ raw 追記、`AppendResult`）
+- [x] **テスト(単体)**: `has_cleaner_section`（ヘッダ/subsection/近似名）, `append_template_if_absent`（新規/冪等/既存保持）— 計7件
+- [x] **テスト(統合)**: `tests/init_idempotent.rs`（HOME=tempdir で2回実行→バイト一致、コメント保存）
+- **Acceptance**: 初回追記／2回目 no-op／既存不変／コメント保存 ✅
+- **Verify**: `make check` パス（41 tests 全通過）+ 手動で実バイト確認（git が `cleaner.protect` を読めることも確認）✅
 
-## [ ] Task 6 — 仕上げ
+## [x] Task 6 — 仕上げ ✅
 
-- [ ] エラーメッセージ（非 repo / targets 未設定 / fetch 失敗 / 候補ゼロ）
-- [ ] ヘルプ文言・exit code
-- [ ] `README.md`
-- [ ] **テスト(統合)**: `tests/error_paths.rs`（非 repo / targets 未設定 / 候補ゼロ）
-- **Acceptance**: 各エラーパスで適切なメッセージ／fetch 失敗は継続／候補ゼロ明示
-- **Verify**: `make check` パス + 各エラーパス手動スモーク
+- [x] エラーメッセージ（非 repo はクリーンな日本語に整備 / targets 未設定 / fetch 失敗は warn 継続 / 候補ゼロ）
+- [x] ヘルプ文言・exit code（非 repo・targets 未設定=1 / 候補ゼロ=0）
+- [x] `README.md`
+- [x] **テスト(統合)**: `tests/error_paths.rs`（非 repo→失敗 / targets 未設定→失敗+ヒント / 候補ゼロ→成功+メッセージ）— 3件
+- **Acceptance**: 各エラーパスで適切なメッセージ／fetch 失敗は継続／候補ゼロ明示 ✅
+- **Verify**: `make check` パス（44 tests 全通過）+ 手動スモーク（非 repo / --help / --version）✅
 
 ---
 
