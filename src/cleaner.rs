@@ -7,7 +7,7 @@
 //! fetch/リモート生存（Task 3）・対話削除（Task 4）は後続。
 
 use crate::config;
-use crate::git::{self, MergeInfo, RemoteState};
+use crate::git::{self, MergeInfo, MergeStatus, RemoteState};
 use crate::ui;
 use anyhow::{bail, Result};
 use chrono::{DateTime, Local};
@@ -26,6 +26,10 @@ pub struct Candidate {
     pub remote_state: RemoteState,
     /// ターゲット側で取り込んだマージコミット情報（特定できない場合は `None`）。
     pub merge_info: Option<MergeInfo>,
+    /// 過去にマージされたが、その後ターゲット未取り込みのコミットが追加されている。
+    pub partially_merged: bool,
+    /// upstream（origin/同名）へ未 push のローカルコミットがある（`-d` が拒否する）。
+    pub unpushed: bool,
 }
 
 /// merged 判定済みの入力（1ブランチ + マッチしたターゲット）。
@@ -41,6 +45,10 @@ pub struct MergedBranch {
     pub remote_state: RemoteState,
     /// ターゲット側で取り込んだマージコミット情報（特定できない場合は `None`）。
     pub merge_info: Option<MergeInfo>,
+    /// 過去にマージされたが、その後ターゲット未取り込みのコミットが追加されている。
+    pub partially_merged: bool,
+    /// upstream（origin/同名）へ未 push のローカルコミットがある（`-d` が拒否する）。
+    pub unpushed: bool,
 }
 
 /// マージ済みブランチ掃除のエントリポイント。
@@ -80,6 +88,8 @@ pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Resul
         name: String,
         tip: git2::Oid,
         matched_target: Option<String>,
+        partially_merged: bool,
+        unpushed: bool,
         last_commit: DateTime<Local>,
         remote_state: RemoteState,
     }
@@ -97,11 +107,26 @@ pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Resul
     let branches = git::local_branches(&repo)?;
     let mut pending: Vec<Pending> = Vec::with_capacity(branches.len());
     for b in branches {
+        // 各ターゲットについてマージ状態を見て、最初に「完全/部分マージ」と判定
+        // できたターゲットを採用する（完全マージを優先）。
         let mut matched_target = None;
+        let mut partially_merged = false;
         for (name, tip) in &target_tips {
-            if git::is_merged_into(&repo, b.tip, *tip)? {
-                matched_target = Some(name.clone());
-                break;
+            match git::merge_status(&repo, b.tip, *tip)? {
+                MergeStatus::Fully => {
+                    matched_target = Some(name.clone());
+                    partially_merged = false;
+                    break;
+                }
+                MergeStatus::Partially => {
+                    // 完全マージが他ターゲットで見つかる可能性があるので即 break せず、
+                    // 暫定的に部分マージとして記録しておく。
+                    if matched_target.is_none() {
+                        matched_target = Some(name.clone());
+                        partially_merged = true;
+                    }
+                }
+                MergeStatus::NotMerged => {}
             }
         }
         // fetch に失敗した場合は生存状態を判定せず Unknown 扱い。
@@ -110,23 +135,28 @@ pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Resul
         } else {
             RemoteState::Unknown
         };
+        // upstream へ未 push のコミットがあるか（git branch -d が拒否する条件）。
+        let unpushed = git::has_unpushed_commits(&repo, &b.name)?;
         pending.push(Pending {
             name: b.name,
             tip: b.tip,
             matched_target,
+            partially_merged,
+            unpushed,
             last_commit: b.last_commit_time,
             remote_state,
         });
     }
 
     // ターゲット単位で履歴を1回走査し、各ブランチ tip を取り込んだマージコミット
-    // を引く。81 ブランチでもターゲットごとに revwalk は1回で済む。
+    // を引く。完全マージ（tip が親）のみマージコミットが特定できる。部分マージは
+    // tip が移動しているため特定できず None（警告表示でカバー）。
     let mut merge_info_by_tip: std::collections::HashMap<git2::Oid, MergeInfo> =
         std::collections::HashMap::new();
     for (name, tip) in &target_tips {
         let tips_for_target: Vec<git2::Oid> = pending
             .iter()
-            .filter(|p| p.matched_target.as_deref() == Some(name.as_str()))
+            .filter(|p| !p.partially_merged && p.matched_target.as_deref() == Some(name.as_str()))
             .map(|p| p.tip)
             .collect();
         if tips_for_target.is_empty() {
@@ -144,6 +174,8 @@ pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Resul
             matched_target: p.matched_target,
             last_commit: p.last_commit,
             remote_state: p.remote_state,
+            partially_merged: p.partially_merged,
+            unpushed: p.unpushed,
         })
         .collect();
 
@@ -183,8 +215,14 @@ pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Resul
     for (i, c) in candidates.iter().enumerate() {
         writeln!(writer, "{}", ui::render_candidate(i + 1, total, c, now))?;
         match ui::prompt(&mut reader, &mut writer, c)? {
-            ui::Decision::Delete => match git::delete_branch(&workdir, &c.name) {
+            // 通常削除（git branch -d）。git の安全機構が拒否すればそのまま surface。
+            ui::Decision::Delete => match git::delete_branch(&workdir, &c.name, false) {
                 Ok(()) => writeln!(writer, "-> 削除しました: {}", c.name)?,
+                Err(e) => writeln!(writer, "-> {e:#}")?,
+            },
+            // 強制削除（git branch -D）。未 push コミットがあるブランチ向け。
+            ui::Decision::Force => match git::delete_branch(&workdir, &c.name, true) {
+                Ok(()) => writeln!(writer, "-> 強制削除しました: {}", c.name)?,
                 Err(e) => writeln!(writer, "-> {e:#}")?,
             },
             ui::Decision::Skip => writeln!(writer, "-> スキップしました。")?,
@@ -220,6 +258,8 @@ pub fn find_candidates(
                 last_commit: b.last_commit,
                 remote_state: b.remote_state,
                 merge_info: b.merge_info,
+                partially_merged: b.partially_merged,
+                unpushed: b.unpushed,
             })
         })
         .collect()
@@ -244,6 +284,8 @@ mod tests {
             last_commit: ts(),
             remote_state: RemoteState::Unknown,
             merge_info: None,
+            partially_merged: false,
+            unpushed: false,
         }
     }
 

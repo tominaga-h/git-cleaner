@@ -103,3 +103,80 @@ fn merged_branch_shows_alive_when_remote_present() {
         "リモートに残存と表示されるべき\n{out}"
     );
 }
+
+fn branch_exists(dir: &Path, name: &str) -> bool {
+    StdCommand::new("git")
+        .args(["rev-parse", "--verify", &format!("refs/heads/{name}")])
+        .current_dir(dir)
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+/// main にマージ済みだが upstream へ未 push のコミットがあるブランチを作る。
+fn setup_unpushed_merged() -> (TempDir, std::path::PathBuf) {
+    let (root, work) = setup();
+
+    // feature を push（upstream 設定）。
+    git(&work, &["checkout", "-q", "-b", "feature/z"]);
+    commit_file(&work, "z1.txt", "z1", "z work");
+    git(&work, &["push", "-q", "-u", "origin", "feature/z"]);
+
+    // ローカルに追加コミット（push しない）。
+    commit_file(&work, "z2.txt", "z2", "z extra local");
+
+    // この最新状態の feature/z を main にマージ（main はローカルでマージ済みになる）。
+    git(&work, &["checkout", "-q", "main"]);
+    git(
+        &work,
+        &["merge", "-q", "--no-ff", "-m", "merge z", "feature/z"],
+    );
+
+    (root, work)
+}
+
+#[test]
+fn unpushed_merged_branch_warns_and_d_is_rejected() {
+    let (_root, work) = setup_unpushed_merged();
+
+    // dry-run で未 push 警告が出る。
+    let assert = Command::cargo_bin("git-cleaner")
+        .unwrap()
+        .current_dir(&work)
+        .arg("-d")
+        .assert()
+        .success();
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(out.contains("feature/z"), "候補に出るべき\n{out}");
+    assert!(out.contains("未 push"), "未 push 警告が出るべき\n{out}");
+
+    // y（通常削除 -d）では git が拒否し、ブランチは残る。
+    Command::cargo_bin("git-cleaner")
+        .unwrap()
+        .current_dir(&work)
+        .write_stdin("y\n")
+        .assert()
+        .success();
+    assert!(
+        branch_exists(&work, "feature/z"),
+        "y(-d) では拒否され残るべき"
+    );
+}
+
+#[test]
+fn unpushed_merged_branch_force_deletes() {
+    let (_root, work) = setup_unpushed_merged();
+    assert!(branch_exists(&work, "feature/z"));
+
+    // force で -D 強制削除される。
+    Command::cargo_bin("git-cleaner")
+        .unwrap()
+        .current_dir(&work)
+        .write_stdin("force\n")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("強制削除しました"));
+
+    assert!(!branch_exists(&work, "feature/z"), "force で削除されるべき");
+}

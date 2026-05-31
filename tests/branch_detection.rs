@@ -89,3 +89,49 @@ fn merged_branch_is_listed_unmerged_and_current_are_not() {
     );
     assert!(out.contains("dry-run"), "dry-run 表示があるべき\n{out}");
 }
+
+#[test]
+fn partially_merged_branch_is_listed_with_warning() {
+    let repo = init_repo();
+    let p = repo.path();
+
+    commit_file(p, "a.txt", "a", "init");
+
+    // feature/partial を main にマージ後、ブランチ側にさらにコミット（未マージ分）。
+    git(p, &["checkout", "-q", "-b", "feature/partial"]);
+    commit_file(p, "b.txt", "b", "work");
+    git(p, &["checkout", "-q", "main"]);
+    git(
+        p,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-m",
+            "merge partial",
+            "feature/partial",
+        ],
+    );
+    git(p, &["checkout", "-q", "feature/partial"]);
+    commit_file(p, "c.txt", "c", "extra unmerged work");
+    git(p, &["checkout", "-q", "main"]);
+
+    let assert = Command::cargo_bin("git-cleaner")
+        .unwrap()
+        .current_dir(p)
+        .args(["-d", "-t", "main"])
+        .assert()
+        .success();
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    // 部分マージブランチは候補に出るが、警告付きで表示される。
+    assert!(
+        out.contains("feature/partial"),
+        "部分マージは候補に出るべき\n{out}"
+    );
+    assert!(out.contains("⚠"), "警告マークが出るべき\n{out}");
+    assert!(
+        out.contains("未マージのコミット"),
+        "警告文言が出るべき\n{out}"
+    );
+}

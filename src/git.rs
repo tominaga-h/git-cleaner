@@ -102,6 +102,68 @@ pub fn is_merged_into(repo: &Repository, branch_tip: Oid, target_tip: Oid) -> Re
         .context("マージ判定に失敗しました")
 }
 
+/// ブランチがターゲットへどの程度マージされているか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeStatus {
+    /// ブランチ tip がターゲットに完全に含まれている（安全に削除可能）。
+    Fully,
+    /// 過去にターゲットへマージされた形跡はあるが、その後にターゲット未取り込みの
+    /// コミットがブランチに追加されている（削除すると未マージ分を失う恐れ）。
+    Partially,
+    /// ターゲットにマージされた形跡がない。
+    NotMerged,
+}
+
+/// ブランチ tip とターゲット tip から、マージ状態を判定する。
+///
+/// 判定方法:
+/// - tip がターゲットに含まれる → `Fully`
+/// - tip は含まれないが、merge-base がブランチ独自のコミット（ターゲットに
+///   取り込まれた過去のブランチ作業）になっている → `Partially`
+/// - merge-base がブランチの分岐元そのもの（取り込まれた作業が無い）→ `NotMerged`
+///
+/// 判定の核心は「merge-base がブランチ固有コミットか、共有の分岐元か」を見ること。
+/// 部分マージでは、ターゲットへ取り込まれたブランチの最終コミットが merge-base に
+/// 前進する。これを「merge-base がブランチ tip の親方向に進んだ別コミットか」では
+/// なく、「ターゲット履歴にこのブランチを取り込んだマージコミットがあるか」で判定
+/// する（最も曖昧さが少ない）。
+pub fn merge_status(repo: &Repository, branch_tip: Oid, target_tip: Oid) -> Result<MergeStatus> {
+    if is_merged_into(repo, branch_tip, target_tip)? {
+        return Ok(MergeStatus::Fully);
+    }
+
+    // 共通祖先（merge-base）。無ければ無関係な履歴＝未マージ。
+    let base = match repo.merge_base(branch_tip, target_tip) {
+        Ok(b) => b,
+        Err(_) => return Ok(MergeStatus::NotMerged),
+    };
+
+    // ターゲットの「第1親のみ」の本流履歴を辿る。merge-base が本流上にあれば、
+    // それは分岐元（共有コミット）であり、このブランチの作業は取り込まれていない
+    // ＝未マージ。本流上に無ければ、merge-base はマージ（第2親）経由でのみ
+    // ターゲットに入った＝このブランチの作業が過去に取り込まれた＝部分マージ。
+    //
+    // 例: 部分マージでは merge-base が「取り込まれたブランチの最終コミット」になり、
+    // それはターゲットの第1親本流には乗らない。develop から分岐しただけの未マージ
+    // ブランチでは merge-base が develop 本流上のコミットになる。
+    let mut commit = repo
+        .find_commit(target_tip)
+        .context("ターゲットコミットの取得に失敗しました")?;
+    loop {
+        if commit.id() == base {
+            // 分岐元が本流上にある＝未マージ。
+            return Ok(MergeStatus::NotMerged);
+        }
+        match commit.parent(0) {
+            Ok(first_parent) => commit = first_parent,
+            Err(_) => break, // 根に到達（base が本流に無かった）。
+        }
+    }
+
+    // base が第1親本流に現れなかった＝マージ経由で取り込まれた＝部分マージ。
+    Ok(MergeStatus::Partially)
+}
+
 /// マージコミット1件の情報（取り込んだ日付と短縮ハッシュ）。
 #[derive(Debug, Clone)]
 pub struct MergeInfo {
@@ -218,17 +280,56 @@ pub fn remote_branch_alive(repo: &Repository, branch_name: &str) -> Result<Remot
     }
 }
 
-/// `git branch -d <name>` をシェルアウトで実行する（安全削除）。
+/// ローカルブランチに、upstream（リモート追跡ブランチ）へ未 push のコミットが
+/// あるかを判定する。
 ///
-/// libgit2 の `Branch::delete` ではなく git の `-d` を使うことで、git 本来の
-/// 「マージ済みでなければ拒否する」安全セマンティクスとエラーメッセージを
-/// そのまま踏襲する。失敗時は git の stderr を surface する。
-pub fn delete_branch(workdir: &std::path::Path, name: &str) -> Result<()> {
+/// `git branch -d` は upstream が設定されていると「upstream にマージ済みか」を
+/// 安全基準にするため、ターゲット（develop 等）にマージ済みでも upstream に未 push
+/// のコミットがあると削除を拒否する。これを事前に検知して警告するために使う。
+///
+/// 判定: upstream が解決でき、かつ `branch_tip` が upstream tip と異なり、
+/// upstream tip が `branch_tip` の子孫でない（= ローカルに upstream へ未反映の
+/// コミットがある）場合に true。upstream 未設定や解決不能時は false。
+pub fn has_unpushed_commits(repo: &Repository, branch_name: &str) -> Result<bool> {
+    let branch = match repo.find_branch(branch_name, BranchType::Local) {
+        Ok(b) => b,
+        Err(_) => return Ok(false),
+    };
+    let local_tip = match branch.get().target() {
+        Some(t) => t,
+        None => return Ok(false),
+    };
+    let upstream = match branch.upstream() {
+        Ok(u) => u,
+        // upstream 未設定/prune 済み → ここでは「未 push」とは扱わない。
+        Err(_) => return Ok(false),
+    };
+    let upstream_tip = match upstream.get().target() {
+        Some(t) => t,
+        None => return Ok(false),
+    };
+    if local_tip == upstream_tip {
+        return Ok(false);
+    }
+    // upstream tip が local tip を含む（= ローカルは upstream に追いついている/遅れて
+    // いる）なら未 push なし。含まないなら、ローカルに upstream 未反映のコミットあり。
+    let upstream_contains_local = repo
+        .graph_descendant_of(upstream_tip, local_tip)
+        .unwrap_or(false);
+    Ok(!upstream_contains_local)
+}
+
+/// `git branch -d`（force=false）/ `git branch -D`（force=true）をシェルアウトする。
+///
+/// `-d` は git 本来の安全削除（マージ済みでなければ拒否）。`-D` は強制削除。
+/// 失敗時は git の stderr を surface する。
+pub fn delete_branch(workdir: &std::path::Path, name: &str, force: bool) -> Result<()> {
+    let flag = if force { "-D" } else { "-d" };
     let output = Command::new("git")
-        .args(["branch", "-d", name])
+        .args(["branch", flag, name])
         .current_dir(workdir)
         .output()
-        .with_context(|| format!("git branch -d {name} の起動に失敗しました"))?;
+        .with_context(|| format!("git branch {flag} {name} の起動に失敗しました"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         anyhow::bail!("'{name}' の削除に失敗しました: {}", stderr.trim());
@@ -316,5 +417,147 @@ mod tests {
             remote_branch_alive(&repo, "main").unwrap(),
             RemoteState::Alive
         );
+    }
+
+    fn commit(dir: &Path, file: &str, msg: &str) {
+        std::fs::write(dir.join(file), msg).unwrap();
+        git(dir, &["add", file]);
+        git(dir, &["commit", "-q", "-m", msg]);
+    }
+
+    fn tip(repo: &Repository, branch: &str) -> Oid {
+        repo.find_branch(branch, BranchType::Local)
+            .unwrap()
+            .get()
+            .target()
+            .unwrap()
+    }
+
+    /// merge_status: 完全マージ / 部分マージ / 未マージ を判定できる。
+    #[test]
+    fn merge_status_distinguishes_full_partial_notmerged() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        git(p, &["init", "-q", "-b", "develop"]);
+        git(p, &["config", "user.email", "t@e.com"]);
+        git(p, &["config", "user.name", "T"]);
+        commit(p, "a.txt", "init");
+
+        // feature/full: develop にマージ後、追加コミットなし → Fully。
+        git(p, &["checkout", "-q", "-b", "feature/full"]);
+        commit(p, "f.txt", "full work");
+        git(p, &["checkout", "-q", "develop"]);
+        git(
+            p,
+            &["merge", "-q", "--no-ff", "-m", "merge full", "feature/full"],
+        );
+
+        // feature/partial: develop にマージ後、さらにブランチ側へ追加コミット → Partially。
+        git(p, &["checkout", "-q", "-b", "feature/partial"]);
+        commit(p, "g.txt", "partial work");
+        git(p, &["checkout", "-q", "develop"]);
+        git(
+            p,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                "merge partial",
+                "feature/partial",
+            ],
+        );
+        git(p, &["checkout", "-q", "feature/partial"]);
+        commit(p, "h.txt", "extra unmerged work");
+
+        // feature/none: develop の最新から分岐したが未マージ → NotMerged。
+        git(p, &["checkout", "-q", "develop"]);
+        git(p, &["checkout", "-q", "-b", "feature/none"]);
+        commit(p, "i.txt", "unmerged");
+
+        // 初期コミット(init)から分岐した古い未マージブランチも NotMerged。
+        let init_oid = {
+            let out = Command::new("git")
+                .args(["rev-list", "--max-parents=0", "develop"])
+                .current_dir(p)
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        git(p, &["checkout", "-q", "-b", "feature/old", &init_oid]);
+        commit(p, "j.txt", "old unmerged");
+
+        let repo = Repository::open(p).unwrap();
+        let dev = tip(&repo, "develop");
+
+        assert_eq!(
+            merge_status(&repo, tip(&repo, "feature/full"), dev).unwrap(),
+            MergeStatus::Fully
+        );
+        assert_eq!(
+            merge_status(&repo, tip(&repo, "feature/partial"), dev).unwrap(),
+            MergeStatus::Partially
+        );
+        assert_eq!(
+            merge_status(&repo, tip(&repo, "feature/none"), dev).unwrap(),
+            MergeStatus::NotMerged
+        );
+        assert_eq!(
+            merge_status(&repo, tip(&repo, "feature/old"), dev).unwrap(),
+            MergeStatus::NotMerged,
+            "古い分岐点の未マージブランチも NotMerged"
+        );
+    }
+
+    /// has_unpushed_commits: ローカルに upstream 未反映のコミットがあると true。
+    #[test]
+    fn has_unpushed_detects_local_ahead_of_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        let remote = p.join("remote.git");
+        std::fs::create_dir(&remote).unwrap();
+        git(&remote, &["init", "-q", "--bare", "-b", "main"]);
+        let work = p.join("work");
+        git(p, &["clone", "-q", remote.to_str().unwrap(), "work"]);
+        git(&work, &["config", "user.email", "t@e.com"]);
+        git(&work, &["config", "user.name", "T"]);
+
+        // feature を作って push（upstream 設定）→ この時点では未 push なし。
+        git(&work, &["checkout", "-q", "-b", "feature/x"]);
+        commit(&work, "a.txt", "a");
+        git(&work, &["push", "-q", "-u", "origin", "feature/x"]);
+        {
+            let repo = Repository::open(&work).unwrap();
+            assert!(
+                !has_unpushed_commits(&repo, "feature/x").unwrap(),
+                "push 直後は未 push なし"
+            );
+        }
+
+        // ローカルに追加コミット（push しない）→ 未 push あり。
+        commit(&work, "b.txt", "b");
+        {
+            let repo = Repository::open(&work).unwrap();
+            assert!(
+                has_unpushed_commits(&repo, "feature/x").unwrap(),
+                "push していないコミットがあれば true"
+            );
+        }
+    }
+
+    /// upstream 未設定のブランチは未 push 判定の対象外（false）。
+    #[test]
+    fn has_unpushed_false_without_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path();
+        git(p, &["init", "-q", "-b", "main"]);
+        git(p, &["config", "user.email", "t@e.com"]);
+        git(p, &["config", "user.name", "T"]);
+        commit(p, "a.txt", "a");
+        git(p, &["checkout", "-q", "-b", "feature/local"]);
+        commit(p, "b.txt", "b");
+
+        let repo = Repository::open(p).unwrap();
+        assert!(!has_unpushed_commits(&repo, "feature/local").unwrap());
     }
 }
