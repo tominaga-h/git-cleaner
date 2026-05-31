@@ -81,26 +81,6 @@ argument-hint: "<tag-name> (例: v1.6.0)"
    cargo publish
    ```
 
-### 5. Homebrew Formula の更新（手動）
-
-自動実行の完了後、以下の手動手順をユーザーに提示する:
-
-1. GitHub Actions のリリースワークフローが完了するのを待つ
-2. リリースアセットをダウンロードして SHA256 を取得する
-   ```bash
-   gh release download <タグ> -R tominaga-h/jarvis-shell --pattern "jarvish-aarch64-apple-darwin.tar.gz" -D /tmp
-   shasum -a 256 /tmp/jarvish-aarch64-apple-darwin.tar.gz | awk '{print $1}'
-   ```
-3. `~/lab/homebrew-tap/Formula/jarvish.rb` の `version` と `sha256` を書き換える
-4. コミット＆プッシュする
-   ```bash
-   cd ~/lab/homebrew-tap
-   git add Formula/jarvish.rb
-   git commit -m "Bump jarvish to <タグ>"
-   git push origin main
-   cd -
-   ```
-
 #### フォールバック手順（ユーザーが NG を返した場合）
 
 以下のコマンドを `<変更ファイル>` と `<タグ>` を実際の値に置換した状態で表示し、処理を一時停止する:
