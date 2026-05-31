@@ -2,39 +2,78 @@ name: CI
 
 on:
   push:
+    branches: [main, develop]
   pull_request:
+    branches: [main, develop]
 
-# 同一ブランチの古い実行はキャンセル（無駄なランを削減）
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+# 同一ブランチ/PR の古い実行はキャンセル（無駄なランを削減）
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   check:
-    name: make check (fmt / check / clippy / test)
+    name: Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # stable ツールチェーン + rustfmt / clippy コンポーネント
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt clippy
-          rustup default stable
+        uses: dtolnay/rust-toolchain@stable
 
-      # cargo registry / target をキャッシュ（Cargo.lock 非コミットのため Cargo.toml をキーに）
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Cache cargo registry & build
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo check
+        run: cargo check --all-targets
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry & build
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo test
+        run: cargo test --all-targets
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+          components: rustfmt
 
-      # 品質ゲート: fmt-check + cargo check -Dwarnings + clippy -D warnings + test
-      # githooks/pre-push.sh を --fix なし（--no-hook のみ）で実行し、整形崩れも検出する
-      - name: Run checks
-        run: bash githooks/pre-push.sh --no-hook
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry & build
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
