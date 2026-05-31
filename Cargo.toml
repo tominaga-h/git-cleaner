@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2021"
 description = "Interactively clean up local git branches already merged into base branches."
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/tominaga-h/git-cleaner"
+homepage = "https://github.com/tominaga-h/git-cleaner"
+readme = "README.md"
 
 [[bin]]
 name = "git-cleaner"
