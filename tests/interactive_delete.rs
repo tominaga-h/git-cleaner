@@ -104,3 +104,75 @@ fn dry_run_never_deletes_even_with_yes() {
         "--dry-run は入力に関わらず削除しないべき"
     );
 }
+
+/// main にマージ済みの feature/0..n を持つ repo を作る（カレントは main）。
+fn repo_with_n_merged_features(n: usize) -> TempDir {
+    let repo = init_repo();
+    let p = repo.path();
+    commit_file(p, "a.txt", "a", "init");
+    for i in 0..n {
+        let branch = format!("feature/{i:02}");
+        git(p, &["checkout", "-q", "-b", &branch]);
+        commit_file(p, &format!("f{i}.txt"), "x", &format!("work {i}"));
+        git(p, &["checkout", "-q", "main"]);
+        git(
+            p,
+            &[
+                "merge",
+                "-q",
+                "--no-ff",
+                "-m",
+                &format!("merge {i}"),
+                &branch,
+            ],
+        );
+    }
+    repo
+}
+
+#[test]
+fn limit_truncates_candidates_in_dry_run() {
+    let repo = repo_with_n_merged_features(5);
+    let p = repo.path();
+
+    let assert = Command::cargo_bin("git-cleaner")
+        .unwrap()
+        .current_dir(p)
+        .args(["-d", "-t", "main", "-l", "2"])
+        .assert()
+        .success();
+    let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    // 先頭2件のみ [1/2] [2/2] が出て、[3/...] は出ない。
+    assert!(out.contains("[1/2]"), "1件目が出るべき\n{out}");
+    assert!(out.contains("[2/2]"), "2件目が出るべき\n{out}");
+    assert!(!out.contains("[3/"), "3件目以降は出ないべき\n{out}");
+    assert!(
+        out.contains("先頭 2 件に絞り込みました"),
+        "絞り込み通知\n{out}"
+    );
+}
+
+#[test]
+fn limit_only_deletes_up_to_n_branches() {
+    let repo = repo_with_n_merged_features(5);
+    let p = repo.path();
+
+    // 全件に y を流しても、--limit 2 なので 2 件しか対象にならない。
+    Command::cargo_bin("git-cleaner")
+        .unwrap()
+        .current_dir(p)
+        .args(["-t", "main", "-l", "2"])
+        .write_stdin("y\ny\ny\ny\ny\n")
+        .assert()
+        .success();
+
+    // 残存ブランチ数を数える（main + 未削除 feature）。
+    let count = (0..5)
+        .filter(|i| branch_exists(p, &format!("feature/{i:02}")))
+        .count();
+    assert_eq!(
+        count, 3,
+        "5件中2件だけ削除され、3件残るべき（実際の残存: {count}）"
+    );
+}

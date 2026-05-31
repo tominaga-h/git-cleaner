@@ -28,6 +28,10 @@ git-cleaner --dry-run
 # config の targets を一時的に上書き
 git-cleaner -t main
 git-cleaner --target develop
+
+# 削除対象を先頭 N 件に絞る（大量のブランチがある場合に便利）
+git-cleaner --limit 5
+git-cleaner -d -l 10        # 先頭10件だけ dry-run で確認
 ```
 
 ### オプション
@@ -36,6 +40,7 @@ git-cleaner --target develop
 |-----------|------|
 | `-d`, `--dry-run` | 実際の削除は行わず、削除対象の一覧と詳細を表示して終了する。 |
 | `-t <BRANCH>`, `--target <BRANCH>` | `cleaner.targets` を一時的に上書きするマージ先ブランチ。 |
+| `-l <N>`, `--limit <N>` | 削除対象を抽出後の先頭 N 件に絞る。dry-run・対話削除の両方に適用される。 |
 
 ## 設定（Git Config 統合）
 

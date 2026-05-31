@@ -44,7 +44,7 @@ pub struct MergedBranch {
 }
 
 /// マージ済みブランチ掃除のエントリポイント。
-pub fn run(dry_run: bool, target: Option<String>) -> Result<()> {
+pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Result<()> {
     let repo = git::open()?;
     let workdir = repo
         .workdir()
@@ -147,11 +147,20 @@ pub fn run(dry_run: bool, target: Option<String>) -> Result<()> {
         })
         .collect();
 
-    let candidates = find_candidates(merged, current.as_deref(), &cfg.protect);
+    let mut candidates = find_candidates(merged, current.as_deref(), &cfg.protect);
 
     if candidates.is_empty() {
         println!("削除対象のブランチはありません。");
         return Ok(());
+    }
+
+    // --limit: 抽出後の先頭 n 件に絞る。truncate された件数は明示する。
+    let matched = candidates.len();
+    if let Some(n) = limit {
+        if n < candidates.len() {
+            candidates.truncate(n);
+            println!("削除対象 {matched} 件のうち、先頭 {n} 件に絞り込みました（--limit {n}）。\n");
+        }
     }
 
     let now = Local::now();

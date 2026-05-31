@@ -16,7 +16,7 @@ fn main() -> ExitCode {
 
     let result = match cli.command {
         Some(Command::Init) => init::run(),
-        None => cleaner::run(cli.dry_run, cli.target),
+        None => cleaner::run(cli.dry_run, cli.target, cli.limit),
     };
 
     match result {

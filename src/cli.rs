@@ -22,6 +22,10 @@ pub struct Cli {
     #[arg(short = 't', long = "target", value_name = "BRANCH", global = true)]
     pub target: Option<String>,
 
+    /// 削除対象を抽出後の先頭から最大 N 件に絞る（大量のブランチがある場合に便利）。
+    #[arg(short = 'l', long = "limit", value_name = "N", global = true)]
+    pub limit: Option<usize>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -74,5 +78,17 @@ mod tests {
     fn init_subcommand_is_recognized() {
         let cli = Cli::try_parse_from(["git-cleaner", "init"]).unwrap();
         assert!(matches!(cli.command, Some(Command::Init)));
+    }
+
+    #[test]
+    fn limit_short_and_long_parse() {
+        let short = Cli::try_parse_from(["git-cleaner", "-l", "5"]).unwrap();
+        assert_eq!(short.limit, Some(5));
+
+        let long = Cli::try_parse_from(["git-cleaner", "--limit", "10"]).unwrap();
+        assert_eq!(long.limit, Some(10));
+
+        let none = Cli::try_parse_from(["git-cleaner"]).unwrap();
+        assert_eq!(none.limit, None);
     }
 }
