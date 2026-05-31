@@ -30,10 +30,7 @@ jobs:
           # Linux (x86_64)
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-          # Apple (Intel)
-          - target: x86_64-apple-darwin
-            os: macos-13 # Intel ランナー
-          # Apple (Apple Silicon)
+          # Apple (Apple Silicon) — Intel Mac でも Rosetta 2 で動作する
           - target: aarch64-apple-darwin
             os: macos-latest
           # Windows (x86_64)
