@@ -15,6 +15,9 @@ cargo build --release   # target/release/git-cleaner
 ## 使い方
 
 ```bash
+# git configに設定を追加
+git-cleaner init
+
 # マージ済みブランチ掃除（対話削除）
 git-cleaner
 
@@ -25,9 +28,6 @@ git-cleaner --dry-run
 # config の targets を一時的に上書き
 git-cleaner -t main
 git-cleaner --target develop
-
-# [cleaner] テンプレートを git config に追記
-git-cleaner init
 ```
 
 ### オプション
