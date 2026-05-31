@@ -29,6 +29,8 @@ pub struct LocalBranch {
     pub tip: Oid,
     /// tip コミットの作成日時（ローカルタイムゾーン）。
     pub last_commit_time: DateTime<Local>,
+    /// tip コミットメッセージの1行目（サマリ）。
+    pub last_commit_summary: String,
 }
 
 /// カレントディレクトリ起点でリポジトリを探索して開く。
@@ -71,10 +73,13 @@ pub fn local_branches(repo: &Repository) -> Result<Vec<LocalBranch>> {
             .find_commit(tip)
             .with_context(|| format!("ブランチ '{name}' のコミットを取得できません"))?;
         let last_commit_time = commit_local_time(commit.time().seconds());
+        // コミットメッセージの1行目（サマリ）。非 UTF-8 / 取得失敗時は空文字。
+        let last_commit_summary = commit.summary().ok().flatten().unwrap_or("").to_string();
         result.push(LocalBranch {
             name,
             tip,
             last_commit_time,
+            last_commit_summary,
         });
     }
     Ok(result)

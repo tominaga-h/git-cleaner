@@ -123,8 +123,18 @@ pub fn render_candidate(idx: usize, total: usize, c: &Candidate, now: DateTime<L
         None => "  - マージ: 日時不明（マージコミットを特定できませんでした）".to_string(),
     };
 
+    // 最終コミット行: 日時（相対）に続けてサマリ（メッセージ1行目）を併記。
+    let last_commit_line = if c.last_commit_summary.is_empty() {
+        format!("  - 最終コミット: {dt} ({rel})")
+    } else {
+        format!(
+            "  - 最終コミット: {dt} ({rel}) {summary}",
+            summary = c.last_commit_summary
+        )
+    };
+
     let mut out = format!(
-        "{heading}\n{merge_line}\n  - 最終コミット: {dt} ({rel})\n  - リモート状態: {remote}",
+        "{heading}\n{merge_line}\n{last_commit_line}\n  - リモート状態: {remote}",
         remote = remote_state_label(c.remote_state),
     );
     if c.partially_merged {
@@ -180,6 +190,7 @@ mod tests {
             name: "feature/x".to_string(),
             matched_target: "main".to_string(),
             last_commit: at(2026, 5, 25, 14, 30),
+            last_commit_summary: "fix: something".to_string(),
             remote_state: RemoteState::Alive,
             merge_info: None,
             partially_merged: false,
@@ -240,6 +251,7 @@ mod tests {
             name: "feature/login-ui".to_string(),
             matched_target: "develop".to_string(),
             last_commit: at(2026, 5, 25, 14, 30),
+            last_commit_summary: "implement login UI".to_string(),
             remote_state: RemoteState::Deleted,
             merge_info: Some(crate::git::MergeInfo {
                 short_hash: "3f9a1c2".to_string(),
@@ -258,6 +270,11 @@ mod tests {
         // マージ行: 日時 + 短縮ハッシュ。
         assert!(out.contains("マージ: 2026-05-26 10:00"));
         assert!(out.contains("[3f9a1c2]"));
+        // 最終コミット行にサマリ（メッセージ1行目）が併記される。
+        assert!(
+            out.contains("implement login UI"),
+            "サマリが出るべき\n{out}"
+        );
     }
 
     #[test]
@@ -267,6 +284,7 @@ mod tests {
             name: "feature/x".to_string(),
             matched_target: "develop".to_string(),
             last_commit: at(2026, 5, 25, 14, 30),
+            last_commit_summary: "wip".to_string(),
             remote_state: RemoteState::Unknown,
             merge_info: None,
             partially_merged: false,
@@ -286,6 +304,7 @@ mod tests {
             name: "feature/wip".to_string(),
             matched_target: "develop".to_string(),
             last_commit: at(2026, 5, 30, 9, 0),
+            last_commit_summary: "wip work".to_string(),
             remote_state: RemoteState::Alive,
             merge_info: None,
             partially_merged: true,

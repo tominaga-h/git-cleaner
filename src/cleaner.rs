@@ -22,6 +22,8 @@ pub struct Candidate {
     pub matched_target: String,
     /// 最終コミット日時。
     pub last_commit: DateTime<Local>,
+    /// 最終コミットメッセージの1行目（サマリ）。
+    pub last_commit_summary: String,
     /// 対応するリモートブランチの生存状態。
     pub remote_state: RemoteState,
     /// ターゲット側で取り込んだマージコミット情報（特定できない場合は `None`）。
@@ -42,6 +44,7 @@ pub struct MergedBranch {
     pub name: String,
     pub matched_target: Option<String>,
     pub last_commit: DateTime<Local>,
+    pub last_commit_summary: String,
     pub remote_state: RemoteState,
     /// ターゲット側で取り込んだマージコミット情報（特定できない場合は `None`）。
     pub merge_info: Option<MergeInfo>,
@@ -91,6 +94,7 @@ pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Resul
         partially_merged: bool,
         unpushed: bool,
         last_commit: DateTime<Local>,
+        last_commit_summary: String,
         remote_state: RemoteState,
     }
 
@@ -144,6 +148,7 @@ pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Resul
             partially_merged,
             unpushed,
             last_commit: b.last_commit_time,
+            last_commit_summary: b.last_commit_summary,
             remote_state,
         });
     }
@@ -173,6 +178,7 @@ pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Resul
             name: p.name,
             matched_target: p.matched_target,
             last_commit: p.last_commit,
+            last_commit_summary: p.last_commit_summary,
             remote_state: p.remote_state,
             partially_merged: p.partially_merged,
             unpushed: p.unpushed,
@@ -227,6 +233,8 @@ pub fn run(dry_run: bool, target: Option<String>, limit: Option<usize>) -> Resul
             },
             ui::Decision::Skip => writeln!(writer, "-> スキップしました。")?,
         }
+        // 候補ごとの区切りに空行を入れる。
+        writeln!(writer)?;
     }
     Ok(())
 }
@@ -256,6 +264,7 @@ pub fn find_candidates(
                 name: b.name,
                 matched_target,
                 last_commit: b.last_commit,
+                last_commit_summary: b.last_commit_summary,
                 remote_state: b.remote_state,
                 merge_info: b.merge_info,
                 partially_merged: b.partially_merged,
@@ -282,6 +291,7 @@ mod tests {
             name: name.to_string(),
             matched_target: target.map(|s| s.to_string()),
             last_commit: ts(),
+            last_commit_summary: "summary".to_string(),
             remote_state: RemoteState::Unknown,
             merge_info: None,
             partially_merged: false,
